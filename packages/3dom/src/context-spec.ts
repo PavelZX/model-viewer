@@ -24,10 +24,12 @@ suite('context', () => {
 
       try {
         const scriptEvaluates = new Promise((resolve) => {
-          context.worker.addEventListener('message', (event) => {
-            expect(event.data).to.be.equal('hello');
-            resolve();
-          }, {once: true});
+          if (context.worker) {
+            context.worker.addEventListener('message', (event) => {
+              expect(event.data).to.be.equal('hello');
+              resolve();
+            }, {once: true});
+          }
         });
 
         context.eval('self.postMessage("hello")');
@@ -42,8 +44,11 @@ suite('context', () => {
 
     suite('when the model changes', () => {
       test('dispatches an event in the worker', async () => {
-        const modelGraft = new ModelGraft('', createFakeGLTF());
         const context = new ThreeDOMExecutionContext(['messaging']);
+        if (!context.worker) {
+          return;
+        }
+        const modelGraft = new ModelGraft('', createFakeGLTF());
         const workerConfirmsEvent = waitForEvent(context.worker, 'message');
 
         context.eval(`
@@ -59,6 +64,9 @@ self.addEventListener('model-change', function() {
     suite('capabilities', () => {
       test('disallows "messaging" by default', async () => {
         const context = new ThreeDOMExecutionContext([]);
+        if (!context.worker) {
+          return;
+        }
         const errorDispatches =
             waitForEvent<ErrorEvent>(context.worker, 'error');
 
@@ -71,6 +79,9 @@ self.addEventListener('model-change', function() {
 
       test('disallows "fetch" by default', async () => {
         const context = new ThreeDOMExecutionContext([]);
+        if (!context.worker) {
+          return;
+        }
         const errorDispatches =
             waitForEvent<ErrorEvent>(context.worker, 'error');
 
@@ -84,6 +95,9 @@ self.addEventListener('model-change', function() {
 
       test('disallows "material-properties" by default', async () => {
         const context = new ThreeDOMExecutionContext([]);
+        if (!context.worker) {
+          return;
+        }
         const errorDispatches =
             waitForEvent<ErrorEvent>(context.worker, 'error');
 

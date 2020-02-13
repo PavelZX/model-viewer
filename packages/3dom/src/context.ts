@@ -113,6 +113,24 @@ initialize.call(self, ModelKernel, preservedContext);
 const $worker = Symbol('worker');
 const $workerInitializes = Symbol('workerInitializes');
 const $modelGraftManipulator = Symbol('modelGraftManipulator');
+const $port2 = Symbol('port2');
+
+export enum ThreeDOMExecutionContextMode {
+  // Everything is self contained in the execution context instance: the
+  // worker and the communication message channel.
+  Standalone,
+
+  // The execution context won't create a worker and will assume that an
+  // external worker will be responsible for the execution of the
+  // communication. The message channel is created so the ports can be
+  // transferred though.
+  ExternalWorker,
+
+  // An external port will be passed in the constructor so NO message
+  // channel should be created and the passed port will be transfereed to
+  // the worker.
+  ExternalPort
+}
 
 /**
  * A ThreeDOMExecutionContext is created in the host execution context that
@@ -131,48 +149,85 @@ export class ThreeDOMExecutionContext extends EventTarget {
     return this[$worker];
   }
 
-  protected[$worker]: Worker;
-  protected[$workerInitializes]: Promise<MessagePort>;
-  protected[$modelGraftManipulator]: ModelGraftManipulator|null = null;
+  get port2() {
+    return this[$port2];
+  }
 
-  constructor(capabilities: Array<ThreeDOMCapability>) {
+  protected[$worker]: Worker|null = null;
+  protected[$workerInitializes]: Promise<MessagePort|null>;
+  protected[$modelGraftManipulator]: ModelGraftManipulator|null = null;
+  protected[$port2]: MessagePort|null = null;
+
+  constructor(
+      capabilities: Array<ThreeDOMCapability>,
+      mode = ThreeDOMExecutionContextMode.Standalone,
+      externalPort?: MessagePort) {
     super();
+
+    if (mode !== ThreeDOMExecutionContextMode.ExternalPort && externalPort) {
+      throw new Error(`An external port must only be passed in ExternalPort
+          mode`);
+    }
+    if (mode === ThreeDOMExecutionContextMode.ExternalPort && !externalPort) {
+      throw new Error(`An external port must be passed in ExternalPort mode`);
+    }
 
     const contextScriptSource = generateContextScriptSource(capabilities);
     const url = URL.createObjectURL(
         new Blob([contextScriptSource], {type: 'text/javascript'}));
 
-    this[$worker] = new Worker(url);
-    this[$workerInitializes] = new Promise<MessagePort>((resolve) => {
-      const {port1, port2} = new MessageChannel();
-      const onMessageEvent = (event: MessageEvent) => {
-        if (event.data &&
-            event.data.type === ThreeDOMMessageType.CONTEXT_INITIALIZED) {
-          port1.removeEventListener('message', onMessageEvent);
+    if (mode !== ThreeDOMExecutionContextMode.ExternalWorker) {
+      this[$worker] = new Worker(url);
+    }
 
-          resolve(port1);
-        }
-      };
+    // Create the MessageChannel if no external port is passed.
+    const {port1, port2} =
+        externalPort ? {port1: null, port2: null} : new MessageChannel();
+    this[$port2] = port2;
 
-      this[$worker].postMessage({type: ThreeDOMMessageType.HANDSHAKE}, [port2]);
+    this[$workerInitializes] = new Promise<MessagePort|null>((resolve) => {
+      let portForWorker = externalPort;
+      if (port1 && port2) {
+        const onMessageEvent = (event: MessageEvent) => {
+          if (event.data &&
+              event.data.type === ThreeDOMMessageType.CONTEXT_INITIALIZED) {
+            port1.removeEventListener('message', onMessageEvent);
 
-      port1.addEventListener('message', onMessageEvent);
-      port1.start();
+            resolve(port1);
+          }
+        };
+
+        port1.addEventListener('message', onMessageEvent);
+        port1.start();
+
+        portForWorker = port2;
+      }
+
+      // If this execution context is operating in the ExternalWorker mode,
+      // the port won't be transferred.
+      const worker = this[$worker];
+      if (worker && portForWorker) {
+        worker.postMessage(
+            {type: ThreeDOMMessageType.HANDSHAKE}, [portForWorker]);
+      }
+
+      if (externalPort) {
+        resolve(null);
+      }
     });
   }
 
   async changeModel(modelGraft: AnyModelGraft|null): Promise<void> {
-    const port = await this[$workerInitializes];
-    const {port1, port2} = new MessageChannel();
-
-    port.postMessage(
-        {
-          type: ThreeDOMMessageType.MODEL_CHANGE,
-          model: modelGraft != null && modelGraft.model != null ?
-              modelGraft.model.toJSON() :
-              null
-        },
-        [port2]);
+    const port1 = await this[$workerInitializes];
+    if (!port1) {
+      return;
+    }
+    port1.postMessage({
+      type: ThreeDOMMessageType.MODEL_CHANGE,
+      model: modelGraft != null && modelGraft.model != null ?
+          modelGraft.model.toJSON() :
+          null
+    });
 
     const modelGraftManipulator = this[$modelGraftManipulator];
 
@@ -197,10 +252,13 @@ export class ThreeDOMExecutionContext extends EventTarget {
    * Workers, so for now all scripts must be valid non-module scripts.
    */
   async eval(scriptSource: string): Promise<void> {
-    const port = await this[$workerInitializes];
+    const port1 = await this[$workerInitializes];
+    if (!port1) {
+      return;
+    }
     const url = URL.createObjectURL(
         new Blob([scriptSource], {type: 'text/javascript'}));
-    port.postMessage({type: ThreeDOMMessageType.IMPORT_SCRIPT, url});
+    port1.postMessage({type: ThreeDOMMessageType.IMPORT_SCRIPT, url});
   }
 
   /**
@@ -209,7 +267,10 @@ export class ThreeDOMExecutionContext extends EventTarget {
    * so that it can be properly garbage collected.
    */
   async terminate() {
-    this[$worker].terminate();
+    const worker = this[$worker];
+    if (worker) {
+      worker.terminate();
+    }
 
     const modelGraftManipulator = this[$modelGraftManipulator];
 
@@ -218,7 +279,9 @@ export class ThreeDOMExecutionContext extends EventTarget {
       this[$modelGraftManipulator] = null;
     }
 
-    const port = await this[$workerInitializes];
-    port.close();
+    const port1 = await this[$workerInitializes];
+    if (port1) {
+      port1.close();
+    }
   }
 }

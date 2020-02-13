@@ -62,7 +62,6 @@ function initialize(
               const previousModel =
                   currentKernel != null ? currentKernel.model : undefined;
               const serialized: SerializedModel|null = data.model;
-              const port = event.ports[0];
 
               if (currentKernel != null) {
                 currentKernel.deactivate();
@@ -72,7 +71,7 @@ function initialize(
               }
 
               if (serialized != null) {
-                currentKernel = new ModelKernel(port, serialized);
+                currentKernel = new ModelKernel(globalPort, serialized);
                 this.model = currentKernel.model;
               } else {
                 currentKernel = null;
