@@ -1,0 +1,11 @@
+commit bc751848b3839b23138aa48de71666580bbd6449
+Author: Takahiro <hogehoge@gachapin.jp>
+Date:   Fri Feb 14 12:11:41 2020 -0800
+
+    Fix the black model problem in WebXR AR mode (#1027)
+    
+    * Set scene.environment in ARRenderer to fix the black model problem in WebXR AR mode
+    
+    * Just in case check if ARRenderer scene.environment is not equal to presentedScene.environment before copying
+    
+    * Release the reference to environment texture in ARRenderer when exiting from AR mode
